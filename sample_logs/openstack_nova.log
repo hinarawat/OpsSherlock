@@ -1,0 +1,5 @@
+nova-compute.log.2026-07-19 2026-07-19 08:12:44.120 2931 INFO nova.compute.manager [req-9c1e3a7b-88f2-41f7-9d21-b2a4f6f0a911 admin admin] [instance: 4b6a2c11-8f0e-4c1a-9b3e-77d2a1c4e9f0] Attempting to build instance
+nova-compute.log.2026-07-19 2026-07-19 08:12:46.891 2931 ERROR nova.compute.manager [req-9c1e3a7b-88f2-41f7-9d21-b2a4f6f0a911 admin admin] [instance: 4b6a2c11-8f0e-4c1a-9b3e-77d2a1c4e9f0] Instance failed to spawn: libvirtError: internal error: qemu unexpectedly closed the monitor
+nova-scheduler.log.2026-07-19 2026-07-19 08:13:02.334 2610 WARNING nova.scheduler.manager [req-1f4d9e22-6a1b-4f3e-8c2d-0e9b7a5c3d21 admin admin] Failed to compute_task_build_instances: NoValidHost: No valid host was found. There are not enough hosts available.
+nova-compute.log.2026-07-19 2026-07-19 08:13:05.412 2931 ERROR nova.compute.manager [instance: 4b6a2c11-8f0e-4c1a-9b3e-77d2a1c4e9f0] Build of instance aborted: exceeded maximum number of retries (3)
+nova-api.log.2026-07-19 2026-07-19 08:13:06.001 25746 INFO nova.osapi_compute.wsgi.server [req-77aa1b0c] 10.11.10.1 "GET /v2/servers/4b6a2c11 HTTP/1.1" status: 200 - instance state: ERROR

@@ -1,0 +1,3 @@
+2026-07-19T05:55:40Z lb-01 haproxy[992]: SSL handshake failure with client 203.0.113.44: certificate has expired
+2026-07-19T05:55:41Z app-gateway ERROR javax.net.ssl.SSLHandshakeException: PKIX path validation failed: certificate expired at Sat Jul 18 23:59:59 UTC 2026
+2026-07-19T05:55:43Z monitoring[201]: ALERT tls_cert_expiry api.acme.io notAfter=2026-07-18T23:59:59Z (EXPIRED)

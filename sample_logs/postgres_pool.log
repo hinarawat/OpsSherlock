@@ -1,0 +1,4 @@
+2026-07-19 07:22:31 UTC [4412] FATAL:  sorry, too many clients already
+2026-07-19 07:22:31 UTC [4413] FATAL:  remaining connection slots are reserved for non-replication superuser connections
+2026-07-19 07:22:33 app/api-service ERROR sqlalchemy.exc.TimeoutError: QueuePool limit of size 20 overflow 10 reached, connection timed out, timeout 30.00
+2026-07-19 07:22:35 app/api-service ERROR could not acquire DB connection after 3 retries, dropping request /v1/users

@@ -1,0 +1,4 @@
+Jul 19 06:02:11 web-03 kernel: EXT4-fs warning (device sda1): ext4_da_write_begin: No space left on device
+Jul 19 06:02:12 web-03 app[3321]: ERROR IOError: [Errno 28] No space left on device: '/var/log/app/access.log'
+Jul 19 06:02:14 web-03 systemd[1]: app.service: Main process exited, code=exited, status=1/FAILURE
+Jul 19 06:02:20 web-03 monitoring[201]: ALERT disk_usage /dev/sda1 100% (df: 49G/49G used)

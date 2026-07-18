@@ -1,0 +1,4 @@
+2026/07/19 08:41:12 [error] 2211#2211: *84421 connect() failed (111: Connection refused) while connecting to upstream, client: 10.4.2.19, server: api.acme.io, request: "GET /v1/orders HTTP/1.1", upstream: "http://10.0.3.7:8080/v1/orders"
+2026/07/19 08:41:12 [error] 2211#2211: *84422 connect() failed (111: Connection refused) while connecting to upstream, client: 10.4.2.20, server: api.acme.io
+10.4.2.19 - - [19/Jul/2026:08:41:12 +0000] "GET /v1/orders HTTP/1.1" 502 559 "-" "curl/8.1.2"
+10.4.2.20 - - [19/Jul/2026:08:41:13 +0000] "POST /v1/checkout HTTP/1.1" 502 559 "-" "Mozilla/5.0"

@@ -1,0 +1,5 @@
+2026-07-19T07:45:12Z aws.rds [db-instance: prod-orders-db] ALARM CloudWatch FreeStorageSpace 1.2 GiB (threshold 5 GiB) state: ALARM
+2026-07-19T07:52:33Z aws.rds [db-instance: prod-orders-db] Event RDS-EVENT-0089: The DB instance has consumed more than 90% of its allocated storage
+2026-07-19T08:01:07Z app/orders-service ERROR PG::DiskFull: could not extend file "base/16384/2619": No space left on device
+2026-07-19T08:01:09Z aws.rds [db-instance: prod-orders-db] Event RDS-EVENT-0007: Allocated storage has been exhausted. The DB instance is now in STORAGE_FULL state
+2026-07-19T08:01:15Z app/orders-service ERROR ActiveRecord::StatementInvalid: writes rejected, database in storage-full state, orders queue backing up (1,204 pending)

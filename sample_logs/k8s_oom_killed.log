@@ -1,0 +1,4 @@
+2026-07-19T09:14:02Z kubelet[1123]: I0719 Pod "payments-api-7d9f8b6c5-x2klj" container "payments-api" restarted
+2026-07-19T09:14:02Z kubelet[1123]: Container payments-api exceeded memory limit (512Mi), usage 511Mi
+2026-07-19T09:14:03Z kubelet[1123]: Killing container payments-api: OOMKilled (exit code 137)
+2026-07-19T09:14:05Z kube-controller[887]: Pod payments-api-7d9f8b6c5-x2klj restart count now 6 (CrashLoopBackOff imminent)
