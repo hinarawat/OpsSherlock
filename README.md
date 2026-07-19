@@ -4,7 +4,7 @@
 
 > *"When ops go wrong, the game is afoot."* Paste an ops log; a team of AI agents scans it for distinct errors, lets you pick which to investigate, finds the root cause and fix, assesses severity — then, after your review and approval, files a Jira ticket and notifies Slack + email.
 
-**Pipeline:** Scan (list error types) → *you choose one* → Parser → Classifier → RAG (internal runbooks) *or* Tavily web search if nothing matches → Remediation → Checklist → Severity → Summary → **human review & edit** → **you approve** → Jira (direct API) + n8n (Slack + email).
+**Pipeline:** Scan (list error types) → *you choose one* → Parser → Classifier → RAG (internal runbooks) *or* Tavily web search if nothing matches → Remediation → Checklist → Severity → Summary → **human review & edit** → **you approve** → n8n (creates the Jira ticket, posts to Slack, emails the requester) → app fetches the ticket back to render a live card.
 
 ## Quickstart (clone & run — no Docker needed)
 
@@ -33,7 +33,7 @@ reports; Jira/Slack/email/Tavily steps are simply skipped with a clear status me
 1. **Scan** — pick a sample log or paste your own. The scanner agent lists the distinct error types found (deduped, with the exact log lines for each) so you can choose which one to investigate.
 2. **Analyze** — a chain of specialist agents (parser, classifier, retriever, remediation, checklist, severity, summary) runs on just that error. If an internal runbook matches, it's used and cited; if not, the agent falls back to a live **Tavily** web search and cites those sources instead.
 3. **Review & approve** — nothing is sent anywhere yet. You see the full report and an editable card (title, severity, fix, checklist, notification email) and can change anything before deciding.
-4. **Send** — on approval, the app creates a **Jira** ticket directly via the Jira API (then fetches it back and shows a live ticket card with a link), and POSTs the incident to an **n8n** webhook which posts to Slack and emails whoever you specified.
+4. **Send** — on approval, the app POSTs the incident to an **n8n** webhook. n8n creates the **Jira** ticket, posts to Slack, and emails whoever you specified — it owns every write. n8n responds with the ticket key, and the app does one read-only Jira API call to fetch it back and show a live ticket card with a link. The app never creates or modifies anything in Jira itself.
 
 ### Secrets — create your own `secrets.toml`, don't reuse anyone else's
 
@@ -54,9 +54,10 @@ TAVILY_API_KEY = ""                     # optional — web search fallback (app.
 JIRA_BASE_URL = ""                      # optional — https://yoursite.atlassian.net
 JIRA_EMAIL = ""
 JIRA_API_TOKEN = ""                     # id.atlassian.com -> Security -> API tokens
-JIRA_PROJECT_KEY = ""                   # e.g. OPS (check your project's ticket prefix)
+                                         # (read-only use: app never creates issues, only fetches
+                                         #  the one n8n just created, to render the ticket card)
 
-N8N_WEBHOOK_URL = ""                    # optional — Slack + email fan-out
+N8N_WEBHOOK_URL = ""                    # optional — Jira create + Slack + email, all via n8n
 SLACK_INVITE_URL = ""                   # optional — shown in the sidebar
 ```
 
@@ -69,21 +70,28 @@ Only `OPENROUTER_API_KEY` is required to run log analysis end-to-end. Everything
 
 So: if you only want to analyze logs, set `OPENROUTER_API_KEY` and stop there. If you want the full Jira/Slack/email chain, you need to set up your **own** n8n workflow (see below), your own Jira project + API token, and your own Slack channel — then put those in your own `secrets.toml`.
 
-### n8n workflow (Slack + email fan-out)
+### n8n workflow (Jira create + Slack + email — n8n owns all writes)
 
-n8n only handles Slack and email — Jira ticket creation happens directly from the app (so the live ticket card can render without depending on n8n).
+**n8n is the only thing that ever creates a Jira ticket.** The app itself is Jira-*read-only*: after n8n creates the ticket and tells the app the ticket key, the app does one `GET` to fetch it back and render the live ticket card. This keeps ticket creation in exactly one place — no duplicate tickets from the app and n8n both trying to create one.
 
-1. **Webhook node** — POST. Payload includes `title`, `severity`, `severity_rationale`, `error_message`, `remediation`, `checklist`, `jira_key`, `jira_url`, `requester_email`.
-2. **Slack node** — post to your incident channel using `{{ $json.body.title }}`, `{{ $json.body.severity }}`, `{{ $json.body.jira_url }}`, etc.
-3. **IF node** — condition: `{{ $json.body.requester_email }}` is not empty.
-4. **Gmail node** (true branch) — To: `{{ $json.body.requester_email }}`, subject `{{ $json.body.title }}`, body with remediation + checklist + Jira link.
+1. **Webhook node** — POST. Payload includes `title`, `severity`, `severity_rationale`, `error_message`, `remediation`, `checklist`, `requester_email`.
+2. **Jira node** — Create issue, using `{{ $json.body.title }}` as summary and the other fields for the description. This is the only place in the whole system that creates a ticket.
+3. From the Jira node, fan out to two branches in parallel:
+   - **Slack node** — post to your incident channel using `{{ $json.body.title }}`, `{{ $json.body.severity }}`, and the ticket link `{{ $node["Jira"].json.self }}` (or build the browse URL from `{{ $node["Jira"].json.key }}`).
+   - **IF node** (condition: `{{ $json.body.requester_email }}` is not empty) → **Gmail node** on the true branch — To: `{{ $json.body.requester_email }}`, subject `{{ $json.body.title }}`, body with remediation + checklist + Jira link.
+4. **Respond to Webhook node** — connect it directly off the **Jira** node (so it fires as soon as the ticket exists, without waiting on Slack/Gmail). Response body:
+   ```json
+   {"jira_key": "{{ $node[\"Jira\"].json.key }}", "jira_url": "https://YOURSITE.atlassian.net/browse/{{ $node[\"Jira\"].json.key }}"}
+   ```
 5. **Activate** the workflow and use the `/webhook/` (production) URL, not `/webhook-test/`.
+
+If the Respond to Webhook node isn't set up yet, everything else still works (Slack + email fire normally) — the app just won't be able to show the ticket card, and will say so in its status line.
 
 ### What a reviewer actually gets (no false promises)
 
 - **Slack:** join the invite link in the sidebar → see incident alerts arrive live in the channel. Fully self-serve.
 - **Email:** enter an email in the review step before approving → n8n emails the full report + ticket link. Fully automatic, if the n8n Gmail node is wired.
-- **Jira dashboard access:** *not* self-serve — Jira has no public "view by email" mechanism. The app will add the email as a ticket **watcher** only if that email already belongs to a member of the Jira site; otherwise it's silently skipped (no invite is sent automatically). The **live ticket card in the app** is how anyone sees proof the ticket was created, without needing Jira access at all.
+- **Jira dashboard access:** *not* self-serve — Jira has no public "view by email" mechanism, and this app doesn't send Jira invites automatically. The **live ticket card in the app** (fetched directly from Jira's API after n8n creates it) is how anyone sees proof the ticket was created, without needing Jira access at all.
 
 ## Data sources
 

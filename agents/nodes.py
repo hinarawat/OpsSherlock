@@ -227,66 +227,31 @@ def _slack_direct(webhook: str, p: dict) -> str:
     return "💬 Slack message sent (direct webhook)."
 
 
-def _jira_direct(cfg: dict, p: dict, requester_email: str = "") -> str:
+def _jira_fetch(cfg: dict, key: str, fallback_title: str = "", fallback_severity: str = "") -> dict:
+    """READ-ONLY: fetch an already-created ticket back from Jira to render the UI card.
+    This never creates or modifies anything in Jira — creation happens in n8n's Jira node."""
     base = cfg["base_url"].rstrip("/")
     auth = (cfg["email"], cfg["api_token"])
-    desc_text = (f"Severity: {p.get('severity')} — {p.get('severity_rationale')}\n\n"
-                 f"Error: {p.get('error_message')}\n\n"
-                 f"Remediation:\n{p.get('remediation')}\n\n"
-                 f"Checklist:\n{p.get('checklist')}")
-    if requester_email:
-        desc_text = f"Requested by: {requester_email}\n\n" + desc_text
-    adf = {"type": "doc", "version": 1, "content": [
-        {"type": "paragraph", "content": [{"type": "text", "text": desc_text[:30000]}]}]}
-    body = {"fields": {
-        "project": {"key": cfg["project_key"]},
-        "summary": str(p.get("title", "OpsSherlock incident"))[:250],
-        "description": adf,
-        "issuetype": {"name": "Task"},
-    }}
-    r = requests.post(f"{base}/rest/api/3/issue", json=body, auth=auth, timeout=20)
-    if r.status_code >= 400:
-        raise RuntimeError(f"Jira {r.status_code}: {r.text[:400]}")
-    key = r.json().get("key", "?")
     url = f"{base}/browse/{key}"
-    status = f"🎫 Jira ticket created: [{key}]({url})"
-
-    # Fetch the ticket back from Jira (live proof for the UI card)
-    ticket = {"key": key, "url": url, "title": p.get("title", ""), "severity": p.get("severity", ""), "status": "?"}
-    try:
-        g = requests.get(f"{base}/rest/api/3/issue/{key}",
-                         params={"fields": "status,summary,created"}, auth=auth, timeout=15)
-        if g.ok:
-            f = g.json().get("fields", {})
-            ticket["status"] = f.get("status", {}).get("name", "?")
-            ticket["title"] = f.get("summary", ticket["title"])
-            ticket["created"] = f.get("created", "")
-    except Exception:
-        pass
-
-    # Add the requester as a watcher so Jira emails them a link to the ticket
-    if requester_email:
-        try:
-            u = requests.get(f"{base}/rest/api/3/user/search",
-                             params={"query": requester_email}, auth=auth, timeout=15)
-            users = u.json() if u.ok else []
-            if users:
-                requests.post(f"{base}/rest/api/3/issue/{key}/watchers",
-                              json=users[0]["accountId"], auth=auth, timeout=15)
-                status += f" · 👀 {requester_email} added as watcher on the Jira ticket"
-            # else: not a member of our Jira site — no dashboard access, silently skip.
-            # They still get the emailed ticket via n8n; no false promise made here.
-        except Exception:
-            status += " · ⚠️ couldn't add watcher"
-    return status, ticket
+    ticket = {"key": key, "url": url, "title": fallback_title, "severity": fallback_severity, "status": "?"}
+    g = requests.get(f"{base}/rest/api/3/issue/{key}",
+                     params={"fields": "status,summary,created"}, auth=auth, timeout=15)
+    if g.status_code >= 400:
+        raise RuntimeError(f"Jira {g.status_code}: {g.text[:300]}")
+    f = g.json().get("fields", {})
+    ticket["status"] = f.get("status", {}).get("name", "?")
+    ticket["title"] = f.get("summary", ticket["title"])
+    ticket["created"] = f.get("created", "")
+    return ticket
 
 
 def _owner_jira_cfg():
+    """Only base_url/email/api_token are required now — the app only ever reads (fetches a
+    ticket for display), never creates. project_key is unused here (creation lives in n8n)."""
     cfg = {
         "base_url": os.environ.get("JIRA_BASE_URL", "").strip(),
         "email": os.environ.get("JIRA_EMAIL", "").strip(),
         "api_token": os.environ.get("JIRA_API_TOKEN", "").strip(),
-        "project_key": os.environ.get("JIRA_PROJECT_KEY", "").strip(),
     }
     return cfg if all(cfg.values()) else None
 
@@ -300,33 +265,37 @@ def notify_agent(state: IncidentState) -> IncidentState:
     p["requester_email"] = requester
     results = []
     ticket = None
+    jira_key = None
 
-    # --- Jira first (BYO creds override owner's env creds) ---
-    byo_jira = state.get("jira") or {}
-    jira_cfg = byo_jira if all(byo_jira.get(k) for k in ("base_url", "email", "api_token", "project_key")) \
-        else _owner_jira_cfg()
-    if jira_cfg:
-        try:
-            jira_status, ticket = _jira_direct(jira_cfg, p, requester)
-            results.append(jira_status)
-            p["jira_key"], p["jira_url"] = ticket["key"], ticket["url"]
-        except Exception as e:
-            results.append(f"⚠️ Jira failed: {e}")
-
-    # --- n8n fan-out: Slack + email (payload now carries the Jira link) ---
+    # --- Step 1: n8n owns CREATION. Its workflow: Webhook -> Jira (create) -> Slack -> IF -> Gmail
+    #     -> Respond to Webhook with {"jira_key": "...", "jira_url": "..."}. The app never calls
+    #     Jira's create-issue endpoint — that lives entirely in n8n now, so there's exactly one
+    #     place a ticket gets created (no more duplicates from app + n8n both creating). ---
     n8n_url = os.environ.get("N8N_WEBHOOK_URL", "").strip()
     if n8n_url:
         try:
-            r = requests.post(n8n_url, json=p, timeout=15)
+            r = requests.post(n8n_url, json=p, timeout=25)
             r.raise_for_status()
+            resp = {}
+            try:
+                resp = r.json()
+            except ValueError:
+                pass
+            # Accept a few common field-naming conventions from the "Respond to Webhook" node
+            jira_key = resp.get("jira_key") or resp.get("ticket_key") or resp.get("key")
+            jira_url_hint = resp.get("jira_url") or resp.get("ticket_url")
             note = "📨 n8n → Slack notified"
             if requester:
                 note += f" + ticket emailed to {requester}"
+            if jira_key:
+                note += f" · 🎫 Jira ticket {jira_key} created (via n8n)"
+            else:
+                note += " · ℹ️ n8n didn't return a Jira key — check its 'Respond to Webhook' node"
             results.append(note + ".")
         except Exception as e:
             results.append(f"⚠️ n8n delivery failed: {e}")
     else:
-        # fallback: direct Slack webhook if configured
+        # fallback: direct Slack webhook if configured (no n8n at all)
         slack_hook = state.get("slack_webhook") or os.environ.get("SLACK_WEBHOOK_URL", "").strip()
         if slack_hook:
             try:
@@ -334,8 +303,24 @@ def notify_agent(state: IncidentState) -> IncidentState:
             except Exception as e:
                 results.append(f"⚠️ Slack failed: {e}")
 
+    # --- Step 2: read-only fetch to render the live ticket card (never creates anything) ---
+    if jira_key:
+        byo_jira = state.get("jira") or {}
+        jira_cfg = byo_jira if all(byo_jira.get(k) for k in ("base_url", "email", "api_token")) \
+            else _owner_jira_cfg()
+        if jira_cfg:
+            try:
+                ticket = _jira_fetch(jira_cfg, jira_key, p.get("title", ""), p.get("severity", ""))
+            except Exception as e:
+                results.append(f"⚠️ Couldn't fetch ticket details: {e}")
+        # Fall back to a minimal card from n8n's own response if the read failed or no
+        # read creds are configured — n8n already told us the key and (usually) the URL.
+        if not ticket:
+            ticket = {"key": jira_key, "url": jira_url_hint or "#",
+                     "title": p.get("title", ""), "severity": p.get("severity", ""), "status": "?"}
+
     if not results:
-        return {"n8n_status": "No integration configured — set JIRA_* and N8N_WEBHOOK_URL in secrets."}
+        return {"n8n_status": "No integration configured — set N8N_WEBHOOK_URL in secrets."}
     out = {"n8n_status": " · ".join(results)}
     if ticket:
         out["jira_ticket"] = ticket
